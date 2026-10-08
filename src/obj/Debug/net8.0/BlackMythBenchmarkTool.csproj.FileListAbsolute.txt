@@ -1,6 +1,0 @@
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.csproj.AssemblyReference.cache
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.GeneratedMSBuildEditorConfig.editorconfig
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.AssemblyInfoInputs.cache
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.AssemblyInfo.cs
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.csproj.CoreCompileInputs.cache
-/Users/user/BlackMythBenchmarkTool/src/obj/Debug/net8.0/BlackMythBenchmarkTool.sourcelink.json
