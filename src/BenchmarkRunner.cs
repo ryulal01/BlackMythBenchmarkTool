@@ -21,7 +21,7 @@ public static class BenchmarkRunner
 
         if (process.ExitCode != 0)
         {
-            throw new Exception(\$"Benchmark failed with exit code {process.ExitCode}");
+            throw new Exception($"Benchmark failed with exit code {process.ExitCode}");
         }
     }
 }

@@ -10,7 +10,7 @@ class Program
             .Build();
 
         var (cpu, gpu, ram) = SystemInfoProvider.GetInfo();
-        Console.WriteLine(\$"System: CPU={cpu}, GPU={gpu}, RAM={ram} GB");
+        Console.WriteLine($"System: CPU={cpu}, GPU={gpu}, RAM={ram} GB");
 
         var cpuArgs = config.GetSection("Tests:Cpu:Arguments").Value;
         var gpuArgs = config.GetSection("Tests:Gpu:Arguments").Value;
@@ -25,8 +25,8 @@ class Program
         BenchmarkRunner.Run(exePath, gpuArgs, timeout);
         var gpuRes = ResultParser.Parse(config.GetSection("Benchmark:ResultFile").Value);
 
-        Console.WriteLine(\$"CPU Test: Avg={cpuRes.AvgFps}, Min={cpuRes.MinFps}, Max={cpuRes.MaxFps}");
-        Console.WriteLine(\$"GPU Test: Avg={gpuRes.AvgFps}, Min={gpuRes.MinFps}, Max={gpuRes.MaxFps}");
+        Console.WriteLine($"CPU Test: Avg={cpuRes.AvgFps}, Min={cpuRes.MinFps}, Max={cpuRes.MaxFps}");
+        Console.WriteLine($"GPU Test: Avg={gpuRes.AvgFps}, Min={gpuRes.MinFps}, Max={gpuRes.MaxFps}");
     }
 }
 
