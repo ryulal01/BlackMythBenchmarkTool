@@ -38,7 +38,7 @@ internal static class Program
         Console.WriteLine($"INI: {ini}");
         Console.WriteLine();
 
-        var computer = HardwareInfo.Read();
+        var computer = ComputerInfo.Read();
         PrintHardware(computer);
 
         // One backup is kept for the entire run. It is restored in finally.
