@@ -13,8 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="..\config\appsettings.json">
-      <Link>config\appsettings.json</Link>
+    <None Include="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

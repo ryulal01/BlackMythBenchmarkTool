@@ -11,7 +11,7 @@ class Program
              ?? Directory.GetCurrentDirectory();
         var config = new ConfigurationBuilder()
             .SetBasePath(exeDir)
-            .AddJsonFile("config/appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
         var (cpu, gpu, ram) = SystemInfoProvider.GetInfo();
