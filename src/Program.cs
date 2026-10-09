@@ -491,7 +491,7 @@ internal static class Program
             return "Unknown";
         }
     }
-
+    
     private static string BuildHtml(
         object computer,
         List<PassResult> results)
@@ -499,30 +499,33 @@ internal static class Program
         string json = JsonSerializer.Serialize(
             new { Computer = computer, Results = results },
             new JsonSerializerOptions { WriteIndented = true });
-
+    
         string escaped = System.Net.WebUtility.HtmlEncode(json);
-
-        return $"""
-            <!doctype html>
-            <html lang="en">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>Black Myth: Wukong Benchmark Report</title>
-              <style>
-                body {{ font: 16px/1.5 system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }}
-                pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f4f6; padding: 20px; border-radius: 8px; }}
-              </style>
-            </head>
-            <body>
-              <h1>Black Myth: Wukong Benchmark Report</h1>
-              <p>Raw report data:</p>
-              <pre>{escaped}</pre>
-            </body>
-            </html>
-            """;
+    
+        var html = new StringBuilder();
+    
+        html.AppendLine("<!doctype html>");
+        html.AppendLine("<html lang=\"en\">");
+        html.AppendLine("<head>");
+        html.AppendLine("  <meta charset=\"utf-8\">");
+        html.AppendLine("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+        html.AppendLine("  <title>Black Myth: Wukong Benchmark Report</title>");
+        html.AppendLine("  <style>");
+        html.AppendLine("    body { font: 16px/1.5 system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }");
+        html.AppendLine("    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f4f6; padding: 20px; border-radius: 8px; }");
+        html.AppendLine("  </style>");
+        html.AppendLine("</head>");
+        html.AppendLine("<body>");
+        html.AppendLine("  <h1>Black Myth: Wukong Benchmark Report</h1>");
+        html.AppendLine("  <p>Benchmark results and computer information:</p>");
+        html.AppendLine("  <pre>");
+        html.AppendLine(escaped);
+        html.AppendLine("  </pre>");
+        html.AppendLine("</body>");
+        html.AppendLine("</html>");
+    
+        return html.ToString();
     }
-
     private sealed record PassResult(
         string Test,
         string ResultKey,
