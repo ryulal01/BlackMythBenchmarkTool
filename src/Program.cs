@@ -1,568 +1,597 @@
-
 using System.Diagnostics;
+using System.Globalization;
+using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 internal static class Program
 {
-    private const string BenchmarkDirectory =
-        @"C:\Program Files (x86)\Steam\steamapps\common\Black Myth Wukong Benchmark Tool";
+    private const string DefaultExe =
+        @"C:\Program Files (x86)\Steam\steamapps\common\Black Myth Wukong Benchmark Tool\b1_benchmark.exe";
 
-    private const string LauncherPath =
-        BenchmarkDirectory + @"\b1_benchmark.exe";
-
-    private const string GamePath =
-        BenchmarkDirectory + @"\b1\Binaries\Win64\b1-Win64-Shipping.exe";
-
-    private const string IniPath =
-        BenchmarkDirectory + @"\b1\Saved\Config\Windows\GameUserSettings.ini";
-
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(90);
-    private static readonly TimeSpan BenchmarkTimeout = TimeSpan.FromMinutes(15);
-
-    private static async Task<int> Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
 
-        Console.WriteLine("Black Myth: Wukong Benchmark Runner");
-        Console.WriteLine("===================================\n");
-
-        string launcher = args.Length >= 2 && args[0] == "--exe"
-            ? Path.GetFullPath(args[1])
-            : LauncherPath;
-
-        string directory = Path.GetDirectoryName(launcher)!;
-        string ini = Path.Combine(
-            directory, @"b1\Saved\Config\Windows\GameUserSettings.ini");
-
-        if (!File.Exists(launcher))
+        var exe = GetArgument(args, "--exe") ?? DefaultExe;
+        if (!File.Exists(exe))
         {
-            Console.Error.WriteLine($"Launcher not found: {launcher}");
-            return 1;
+            Console.WriteLine($"Benchmark executable not found:\n{exe}");
+            Console.WriteLine("Use: WukongBenchmarkRunner.exe --exe \"D:\\SteamLibrary\\steamapps\\common\\Black Myth Wukong Benchmark Tool\\b1_benchmark.exe\"");
+            return 2;
         }
 
-        if (!File.Exists(GamePath))
-        {
-            Console.Error.WriteLine($"Benchmark executable not found: {GamePath}");
-            return 1;
-        }
+        var root = Directory.GetParent(exe)!.FullName;
+        var ini = Path.Combine(root, "b1", "Saved", "Config", "Windows", "GameUserSettings.ini");
 
         if (!File.Exists(ini))
         {
-            Console.Error.WriteLine($"Configuration file not found: {ini}");
-            Console.Error.WriteLine(
-                "Launch the Benchmark Tool manually once, then try again.");
-            return 1;
+            Console.WriteLine($"Configuration file not found:\n{ini}");
+            return 3;
         }
 
-        Console.WriteLine($"Launcher: {launcher}");
-        Console.WriteLine($"Game:     {GamePath}");
-        Console.WriteLine($"INI:      {ini}\n");
-
-        Console.WriteLine("Computer:");
-        Console.WriteLine($"OS : {GetPowerShellValue(
-            "(Get-CimInstance Win32_OperatingSystem).Caption")}");
-        Console.WriteLine($"CPU: {GetPowerShellValue(
-            "(Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)")}");
-        Console.WriteLine($"GPU: {GetPowerShellValue(
-            "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name)")}");
-        Console.WriteLine($"RAM: {GetPowerShellValue(
-            "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1).ToString() + ' GB'")}");
-        Console.WriteLine($"GPU driver: {GetPowerShellValue(
-            "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty DriverVersion)")}");
+        Console.WriteLine("Black Myth: Wukong Benchmark Runner");
+        Console.WriteLine(new string('=', 44));
+        Console.WriteLine($"EXE: {exe}");
+        Console.WriteLine($"INI: {ini}");
         Console.WriteLine();
 
-        string backupPath = ini + ".wukong-backup";
-        string originalIni = File.ReadAllText(ini);
+        var computer = HardwareInfo.Read();
+        PrintHardware(computer);
 
-        if (!File.Exists(backupPath))
-            File.Copy(ini, backupPath);
+        // One backup is kept for the entire run. It is restored in finally.
+        var backup = ini + ".wukong-runner.bak";
+        File.Copy(ini, backup, true);
 
-        var results = new List<PassResult>();
+        BenchmarkResult? cpu = null;
+        BenchmarkResult? gpu = null;
 
         try
         {
-            var cpuSettings = new Dictionary<string, string>
-            {
-                ["ResolutionSizeX"] = "1280",
-                ["ResolutionSizeY"] = "720",
-                ["LastUserConfirmedResolutionSizeX"] = "1280",
-                ["LastUserConfirmedResolutionSizeY"] = "720",
-                ["sg.ResolutionQuality"] = "100.000000",
-                ["sg.ViewDistanceQuality"] = "0",
-                ["sg.AntiAliasingQuality"] = "0",
-                ["sg.ShadowQuality"] = "0",
-                ["sg.PostProcessQuality"] = "0",
-                ["sg.TextureQuality"] = "0",
-                ["sg.EffectsQuality"] = "0",
-                ["sg.FoliageQuality"] = "0",
-                ["sg.ShadingQuality"] = "0",
-                ["bUseVSync"] = "False",
-                ["FrameRateLimit"] = "0.000000"
-            };
-
-            Console.WriteLine("--- CPU TEST ---");
-            Console.WriteLine(
-                "Target: 1280x720, Low graphics, 100% resolution scale, VSync off.");
-            Console.WriteLine(
-                "Note: ray-tracing settings can vary by Benchmark Tool version.");
-
-            var cpuResult = await RunPassAsync(
+            cpu = await RunPassAsync(
                 "CPU",
-                launcher,
+                exe,
                 ini,
-                cpuSettings,
-                "LastCPUBenchmarkResult");
+                BenchmarkSettings.Cpu(),
+                "LastCPUBenchmarkResult",
+                TimeSpan.FromMinutes(10));
 
-            results.Add(cpuResult);
-
-            Console.WriteLine("\n--- GPU TEST ---");
-
-            var gpuSettings = new Dictionary<string, string>
-            {
-                ["ResolutionSizeX"] = "3840",
-                ["ResolutionSizeY"] = "2160",
-                ["LastUserConfirmedResolutionSizeX"] = "3840",
-                ["LastUserConfirmedResolutionSizeY"] = "2160",
-                ["sg.ResolutionQuality"] = "100.000000",
-                ["sg.ViewDistanceQuality"] = "4",
-                ["sg.AntiAliasingQuality"] = "4",
-                ["sg.ShadowQuality"] = "4",
-                ["sg.PostProcessQuality"] = "4",
-                ["sg.TextureQuality"] = "4",
-                ["sg.EffectsQuality"] = "4",
-                ["sg.FoliageQuality"] = "4",
-                ["sg.ShadingQuality"] = "4",
-                ["bUseVSync"] = "False",
-                ["FrameRateLimit"] = "0.000000"
-            };
-
-            Console.WriteLine(
-                "Target: 3840x2160, Cinematic graphics, 100% resolution scale.");
-
-            var gpuResult = await RunPassAsync(
+            gpu = await RunPassAsync(
                 "GPU",
-                launcher,
+                exe,
                 ini,
-                gpuSettings,
-                "LastGPUBenchmarkResult");
-
-            results.Add(gpuResult);
-
-            var report = new
-            {
-                GeneratedAt = DateTimeOffset.Now,
-                Computer = new
-                {
-                    OS = GetPowerShellValue(
-                        "(Get-CimInstance Win32_OperatingSystem).Caption"),
-                    CPU = GetPowerShellValue(
-                        "(Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)"),
-                    GPU = GetPowerShellValue(
-                        "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name)"),
-                    RAM = GetPowerShellValue(
-                        "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1).ToString() + ' GB'"),
-                    GPUDriver = GetPowerShellValue(
-                        "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty DriverVersion)")
-                },
-                Results = results
-            };
-
-            string jsonPath = Path.Combine(
-                AppContext.BaseDirectory, "wukong-report.json");
-
-            File.WriteAllText(
-                jsonPath,
-                JsonSerializer.Serialize(
-                    report,
-                    new JsonSerializerOptions { WriteIndented = true }));
-
-            string htmlPath = Path.Combine(
-                AppContext.BaseDirectory, "wukong-report.html");
-
-            File.WriteAllText(htmlPath, BuildHtml(report.Computer, results));
-
-            Console.WriteLine("\nBoth passes finished.");
-            Console.WriteLine($"JSON report: {jsonPath}");
-            Console.WriteLine($"HTML report: {htmlPath}");
-
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"\nERROR: {ex.Message}");
-            return 1;
+                BenchmarkSettings.Gpu(),
+                "LastGPUBenchmarkResult",
+                TimeSpan.FromMinutes(20));
         }
         finally
         {
-            CloseBenchmarkProcesses();
-
-            try
-            {
-                File.WriteAllText(ini, originalIni);
-                Console.WriteLine("Original GameUserSettings.ini restored.");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine(
-                    $"WARNING: Could not restore INI: {ex.Message}");
-                Console.Error.WriteLine($"Backup: {backupPath}");
-            }
+            // Restore user's original settings, including their old benchmark values.
+            File.Copy(backup, ini, true);
+            File.Delete(backup);
         }
+
+        var report = new BenchmarkReport
+        {
+            TimestampUtc = DateTime.UtcNow,
+            Executable = exe,
+            Computer = computer,
+            CpuTest = cpu,
+            GpuTest = gpu
+        };
+
+        var reportPath = Path.Combine(AppContext.BaseDirectory, "wukong-report.json");
+        var htmlPath = Path.Combine(AppContext.BaseDirectory, "wukong-report.html");
+
+        await File.WriteAllTextAsync(
+            reportPath,
+            JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+
+        await File.WriteAllTextAsync(htmlPath, HtmlReport.Render(report), Encoding.UTF8);
+
+        Console.WriteLine();
+        Console.WriteLine("Completed.");
+        Console.WriteLine($"JSON : {reportPath}");
+        Console.WriteLine($"HTML : {htmlPath}");
+        Console.WriteLine();
+        PrintResult(cpu);
+        PrintResult(gpu);
+
+        return 0;
     }
 
-    private static async Task<PassResult> RunPassAsync(
+    private static async Task<BenchmarkResult> RunPassAsync(
         string name,
-        string launcher,
+        string exe,
         string ini,
-        Dictionary<string, string> settings,
-        string resultKey)
+        BenchmarkSettings settings,
+        string resultKey,
+        TimeSpan timeout)
     {
-        CloseBenchmarkProcesses();
+        Console.WriteLine();
+        Console.WriteLine($"--- {name} TEST ---");
+        Console.WriteLine(settings.Description);
 
-        string before = File.ReadAllText(ini);
-        string? previousResult = GetIniValue(before, resultKey);
+        IniFile.Apply(ini, settings);
+        IniFile.Set(ini, "LastCPUBenchmarkResult", "-1.000000");
+        IniFile.Set(ini, "LastGPUBenchmarkResult", "-1.000000");
 
-        File.WriteAllText(ini, ApplyIniSettings(before, settings));
+        var before = IniFile.Read(ini);
 
-        Console.WriteLine("Settings written to GameUserSettings.ini.");
-        Console.WriteLine("Starting Benchmark Tool...");
-
-        Process.Start(new ProcessStartInfo
+        using var process = new Process
         {
-            FileName = launcher,
-            WorkingDirectory = Path.GetDirectoryName(launcher)!,
-            UseShellExecute = true
-        });
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = exe,
+                WorkingDirectory = Path.GetDirectoryName(exe)!,
+                UseShellExecute = true
+            }
+        };
 
-        using Process benchmark = await WaitForBenchmarkWindowAsync(
-            StartupTimeout);
+        if (!process.Start())
+            throw new InvalidOperationException("Could not start b1_benchmark.exe.");
 
-        Console.WriteLine(
-            $"Benchmark window found. PID: {benchmark.Id}");
+        // The standalone benchmark opens its main menu. The first menu item is
+        // "Run Benchmark" / "Тест быстродействия" in the supplied screenshots.
+        await WaitForMainWindowAsync(process, TimeSpan.FromSeconds(60));
+        await Task.Delay(TimeSpan.FromSeconds(8));
 
-        await Task.Delay(1500);
+        // The launcher may create a separate Unreal game process. Refresh the
+        // launcher handle, then use keyboard navigation in the foreground window.
+        process.Refresh();
+        WindowInput.BringToFront(process.MainWindowHandle);
+        Console.WriteLine("Sending Enter to dismiss the startup/continue screen...");
+        WindowInput.SendEnter();
+        await Task.Delay(TimeSpan.FromSeconds(8));
 
-        WindowInput.BringToFront(benchmark.MainWindowHandle);
+        // On the main menu, Home selects the first item (Benchmark) before Enter.
+        // This is more reliable than sending Enter without checking the selection.
+        WindowInput.BringToFront(process.MainWindowHandle);
+        WindowInput.SendHome();
         await Task.Delay(500);
         WindowInput.SendEnter();
 
-        Console.WriteLine(
-            "Enter sent. Waiting for the benchmark result to update...");
+        Console.WriteLine("Automated menu input sent. Waiting for the benchmark result in GameUserSettings.ini...");
 
-        var timer = Stopwatch.StartNew();
-
-        while (timer.Elapsed < BenchmarkTimeout)
+        var sw = Stopwatch.StartNew();
+        float? value = null;
+        while (sw.Elapsed < timeout)
         {
-            await Task.Delay(2000);
+            await Task.Delay(1000);
 
-            string currentIni;
-
-            try
+            var data = IniFile.Read(ini);
+            if (data.TryGetValue(resultKey, out var raw) &&
+                float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) &&
+                parsed >= 0)
             {
-                currentIni = File.ReadAllText(ini);
-            }
-            catch (IOException)
-            {
-                continue;
+                value = parsed;
+                break;
             }
 
-            string? currentResult = GetIniValue(currentIni, resultKey);
-
-            if (!string.IsNullOrWhiteSpace(currentResult) &&
-                currentResult != previousResult)
-            {
-                Console.WriteLine($"{resultKey} = {currentResult}");
-
-                return new PassResult(
-                    name,
-                    resultKey,
-                    currentResult,
-                    settings);
-            }
-
-            if (benchmark.HasExited)
-            {
-                // Give the game a short opportunity to flush its result.
-                await Task.Delay(1500);
-                currentIni = File.ReadAllText(ini);
-                currentResult = GetIniValue(currentIni, resultKey);
-
-                if (!string.IsNullOrWhiteSpace(currentResult) &&
-                    currentResult != previousResult)
-                {
-                    return new PassResult(
-                        name, resultKey, currentResult, settings);
-                }
-
+            // If the game rewrites the file, keep waiting. We deliberately do
+            // not infer completion from process exit because the result screen
+            // can remain open after the benchmark.
+            if (process.HasExited)
                 throw new InvalidOperationException(
-                    $"{name} benchmark process exited before {resultKey} changed. " +
-                    "The test may not have started, or this version may store results elsewhere.");
-            }
+                    $"{name} benchmark process exited before {resultKey} was written.");
         }
 
-        throw new TimeoutException(
-            $"{name} benchmark result was not updated within {BenchmarkTimeout.TotalMinutes} minutes. " +
-            "Check whether the benchmark actually started and whether this INI contains the expected result key.");
-    }
+        if (value is null)
+            throw new TimeoutException(
+                $"{name} benchmark did not write {resultKey} within {timeout.TotalMinutes:0} minutes.");
 
-    private static async Task<Process> WaitForBenchmarkWindowAsync(
-        TimeSpan timeout)
-    {
-        var timer = Stopwatch.StartNew();
+        var after = IniFile.Read(ini);
 
-        while (timer.Elapsed < timeout)
+        // Keep all metrics that the benchmark itself exposes in the INI.
+        var metrics = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in new[]
+                 {
+                     "LastCPUBenchmarkResult",
+                     "LastGPUBenchmarkResult",
+                     "LastGPUBenchmarkMultiplier",
+                     "LastRecommendedScreenWidth",
+                     "LastRecommendedScreenHeight"
+                 })
         {
-            foreach (Process process in Process.GetProcessesByName(
-                         "b1-Win64-Shipping"))
-            {
-                try
-                {
-                    if (process.HasExited)
-                    {
-                        process.Dispose();
-                        continue;
-                    }
-
-                    process.Refresh();
-
-                    string? path = null;
-
-                    try
-                    {
-                        path = process.MainModule?.FileName;
-                    }
-                    catch
-                    {
-                        // Windows may deny access while the process starts.
-                    }
-
-                    if (path is not null &&
-                        string.Equals(
-                            Path.GetFullPath(path),
-                            Path.GetFullPath(GamePath),
-                            StringComparison.OrdinalIgnoreCase) &&
-                        process.MainWindowHandle != IntPtr.Zero)
-                    {
-                        return process;
-                    }
-
-                    process.Dispose();
-                }
-                catch
-                {
-                    process.Dispose();
-                }
-            }
-
-            await Task.Delay(500);
+            if (after.TryGetValue(key, out var v))
+                metrics[key] = v;
         }
 
-        throw new TimeoutException(
-            "The main window of b1-Win64-Shipping.exe did not appear. " +
-            "Try launching the Benchmark Tool manually and check for startup errors.");
+        return new BenchmarkResult
+        {
+            Name = name,
+            MetricKey = resultKey,
+            MetricValue = value.Value,
+            StartedUtc = DateTime.UtcNow - sw.Elapsed,
+            FinishedUtc = DateTime.UtcNow,
+            Settings = settings.ToDictionary(),
+            Metrics = metrics
+        };
     }
 
-    private static void CloseBenchmarkProcesses()
+    private static async Task WaitForMainWindowAsync(Process process, TimeSpan timeout)
     {
-        foreach (Process process in Process.GetProcessesByName(
-                     "b1-Win64-Shipping"))
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < timeout)
+        {
+            if (process.HasExited)
+                throw new InvalidOperationException("Benchmark process exited during startup.");
+
+            process.Refresh();
+            if (process.MainWindowHandle != IntPtr.Zero)
+                return;
+
+            await Task.Delay(250);
+        }
+
+        throw new TimeoutException("Benchmark window did not appear.");
+    }
+
+    private static void PrintHardware(ComputerInfo c)
+    {
+        Console.WriteLine("Computer:");
+        Console.WriteLine($"  OS  : {c.Os}");
+        Console.WriteLine($"  CPU : {c.Cpu}");
+        Console.WriteLine($"  GPU : {c.Gpu}");
+        Console.WriteLine($"  RAM : {c.RamGb:0.0} GB");
+        Console.WriteLine($"  GPU driver: {c.GpuDriver}");
+        Console.WriteLine();
+    }
+
+    private static void PrintResult(BenchmarkResult? r)
+    {
+        if (r is null) return;
+        Console.WriteLine($"{r.Name}: {r.MetricKey} = {r.MetricValue:0.######}");
+        foreach (var m in r.Metrics)
+            Console.WriteLine($"  {m.Key} = {m.Value}");
+    }
+
+    private static string? GetArgument(string[] args, string key)
+    {
+        for (var i = 0; i < args.Length - 1; i++)
+            if (string.Equals(args[i], key, StringComparison.OrdinalIgnoreCase))
+                return args[i + 1];
+        return null;
+    }
+}
+
+internal sealed record BenchmarkSettings
+{
+    public required string Description { get; init; }
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public int ResolutionQuality { get; init; }
+    public int Quality { get; init; }
+    public bool RayTracing { get; init; }
+
+    public static BenchmarkSettings Cpu() => new()
+    {
+        Description = "1280x720, 100% resolution scale, all scalability groups Low, RT Off, VSync/FPS cap Off.",
+        Width = 1280,
+        Height = 720,
+        ResolutionQuality = 100,
+        Quality = 0,
+        RayTracing = false
+    };
+
+    public static BenchmarkSettings Gpu() => new()
+    {
+        Description = "3840x2160, 100% resolution scale, all scalability groups Cinematic, RT On, VSync/FPS cap Off.",
+        Width = 3840,
+        Height = 2160,
+        ResolutionQuality = 100,
+        Quality = 4,
+        RayTracing = true
+    };
+
+    public Dictionary<string, string> ToDictionary() => new()
+    {
+        ["Resolution"] = $"{Width}x{Height}",
+        ["ResolutionQuality"] = ResolutionQuality.ToString(CultureInfo.InvariantCulture),
+        ["ViewDistanceQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["AntiAliasingQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["ShadowQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["GlobalIlluminationQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["RayTracingQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["ReflectionQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["PostProcessQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["TextureQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["EffectsQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["FoliageQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["ShadingQuality"] = Quality.ToString(CultureInfo.InvariantCulture),
+        ["RayTracing"] = RayTracing ? "On" : "Off",
+        ["VSync"] = "Off",
+        ["FrameRateLimit"] = "Unlimited"
+    };
+}
+
+internal static class IniFile
+{
+    private static readonly string[] ScaleKeys =
+    {
+        "sg.ViewDistanceQuality",
+        "sg.AntiAliasingQuality",
+        "sg.ShadowQuality",
+        "sg.GlobalIlluminationQuality",
+        "sg.RayTracingQuality",
+        "sg.ReflectionQuality",
+        "sg.PostProcessQuality",
+        "sg.TextureQuality",
+        "sg.EffectsQuality",
+        "sg.FoliageQuality",
+        "sg.ShadingQuality"
+    };
+
+    public static void Apply(string path, BenchmarkSettings s)
+    {
+        Set(path, "ResolutionSizeX", s.Width.ToString(CultureInfo.InvariantCulture));
+        Set(path, "ResolutionSizeY", s.Height.ToString(CultureInfo.InvariantCulture));
+        Set(path, "LastUserConfirmedResolutionSizeX", s.Width.ToString(CultureInfo.InvariantCulture));
+        Set(path, "LastUserConfirmedResolutionSizeY", s.Height.ToString(CultureInfo.InvariantCulture));
+        Set(path, "DesiredScreenWidth", s.Width.ToString(CultureInfo.InvariantCulture));
+        Set(path, "DesiredScreenHeight", s.Height.ToString(CultureInfo.InvariantCulture));
+
+        Set(path, "FrameRateLimit", "0.000000");
+        Set(path, "bUseVSync", "False");
+        Set(path, "bUseDynamicResolution", "False");
+        Set(path, "sg.ResolutionQuality", s.ResolutionQuality.ToString(CultureInfo.InvariantCulture));
+
+        foreach (var key in ScaleKeys)
+            Set(path, key, s.Quality.ToString(CultureInfo.InvariantCulture));
+
+        Set(path, "r.RayTracing.EnableInGame", s.RayTracing ? "True" : "False");
+
+        // These are useful if the file already contains an explicit renderer section.
+        Set(path, "r.RayTracing", s.RayTracing ? "1" : "0");
+    }
+
+    public static Dictionary<string, string> Read(string path)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in File.ReadLines(path))
+        {
+            var t = line.Trim();
+            if (t.Length == 0 || t.StartsWith(';') || t.StartsWith('['))
+                continue;
+
+            var eq = t.IndexOf('=');
+            if (eq <= 0) continue;
+
+            result[t[..eq].Trim()] = t[(eq + 1)..].Trim();
+        }
+        return result;
+    }
+
+    public static void Set(string path, string key, string value)
+    {
+        var lines = File.ReadAllLines(path).ToList();
+        var rx = new Regex(@"^(\s*)" + Regex.Escape(key) + @"\s*=", RegexOptions.IgnoreCase);
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (rx.IsMatch(lines[i]))
+            {
+                var indent = Regex.Match(lines[i], @"^\s*").Value;
+                lines[i] = indent + key + "=" + value;
+                File.WriteAllLines(path, lines);
+                return;
+            }
+        }
+
+        // Put missing settings into the appropriate section.
+        var section = key.StartsWith("sg.", StringComparison.OrdinalIgnoreCase)
+            ? "[ScalabilityGroups]"
+            : key.StartsWith("r.", StringComparison.OrdinalIgnoreCase)
+                ? "[RayTracing]"
+                : "[/Script/GSGameSettings.GSGameUserSettings]";
+
+        var idx = lines.FindIndex(x => x.Trim().Equals(section, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0)
+        {
+            lines.Add("");
+            lines.Add(section);
+            lines.Add(key + "=" + value);
+        }
+        else
+        {
+            var insert = idx + 1;
+            while (insert < lines.Count && !lines[insert].TrimStart().StartsWith("["))
+                insert++;
+            lines.Insert(insert, key + "=" + value);
+        }
+
+        File.WriteAllLines(path, lines);
+    }
+}
+
+internal static class WindowInput
+{
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private const int SW_RESTORE = 9;
+    private const ushort KEYEVENTF_KEYUP = 0x0002;
+    private const ushort VK_RETURN = 0x0D;
+    private const ushort VK_HOME = 0x24;
+
+    public static void BringToFront(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+    }
+
+    public static void SendEnter() => SendKey(VK_RETURN);
+    public static void SendHome() => SendKey(VK_HOME);
+
+    private static void SendKey(ushort key)
+    {
+        var inputs = new[]
+        {
+            new INPUT { type = 1, U = new InputUnion { ki = new KEYBDINPUT { wVk = key } } },
+            new INPUT { type = 1, U = new InputUnion { ki = new KEYBDINPUT { wVk = key, dwFlags = KEYEVENTF_KEYUP } } }
+        };
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion U;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+}
+
+internal sealed record ComputerInfo
+{
+    public string Os { get; init; } = "";
+    public string Cpu { get; init; } = "";
+    public string Gpu { get; init; } = "";
+    public string GpuDriver { get; init; } = "";
+    public double RamGb { get; init; }
+
+    public static ComputerInfo Read()
+    {
+        string Query(string q, string field)
         {
             try
             {
-                if (!process.HasExited)
-                {
-                    process.CloseMainWindow();
-
-                    if (!process.WaitForExit(3000))
-                        process.Kill(true);
-                }
+                using var s = new ManagementObjectSearcher(q);
+                foreach (ManagementObject o in s.Get())
+                    return o[field]?.ToString() ?? "Unknown";
             }
-            catch
-            {
-                // Ignore processes that already exited.
-            }
-            finally
-            {
-                process.Dispose();
-            }
-        }
-    }
-
-    private static string ApplyIniSettings(
-        string ini,
-        Dictionary<string, string> settings)
-    {
-        const string section = "[/Script/Engine.GameUserSettings]";
-
-        var lines = ini.Replace("\r\n", "\n").Split('\n').ToList();
-
-        int sectionIndex = lines.FindIndex(
-            line => line.Trim().Equals(
-                section, StringComparison.OrdinalIgnoreCase));
-
-        if (sectionIndex < 0)
-        {
-            lines.Add(section);
-            sectionIndex = lines.Count - 1;
+            catch { }
+            return "Unknown";
         }
 
-        int endIndex = lines.Count;
+        var cpu = Query("SELECT Name FROM Win32_Processor", "Name");
+        var gpu = Query("SELECT Name FROM Win32_VideoController", "Name");
+        var driver = Query("SELECT DriverVersion FROM Win32_VideoController", "DriverVersion");
+        var os = Query("SELECT Caption FROM Win32_OperatingSystem", "Caption");
 
-        for (int i = sectionIndex + 1; i < lines.Count; i++)
+        double ram = 0;
+        try
         {
-            if (lines[i].TrimStart().StartsWith('['))
+            using var s = new ManagementObjectSearcher("SELECT TotalPhysicalMemory FROM Win32_ComputerSystem");
+            foreach (ManagementObject o in s.Get())
             {
-                endIndex = i;
+                if (double.TryParse(o["TotalPhysicalMemory"]?.ToString(), out var bytes))
+                    ram = bytes / 1024 / 1024 / 1024;
                 break;
             }
         }
+        catch { }
 
-        foreach (var setting in settings)
-        {
-            bool replaced = false;
-
-            for (int i = sectionIndex + 1; i < endIndex; i++)
-            {
-                string trimmed = lines[i].Trim();
-
-                if (trimmed.StartsWith(
-                        setting.Key + "=",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    lines[i] = $"{setting.Key}={setting.Value}";
-                    replaced = true;
-                }
-            }
-
-            if (!replaced)
-            {
-                lines.Insert(endIndex, $"{setting.Key}={setting.Value}");
-                endIndex++;
-            }
-        }
-
-        return string.Join("\r\n", lines);
-    }
-
-    private static string? GetIniValue(string ini, string key)
-    {
-        foreach (string line in ini.Split('\n'))
-        {
-            string trimmed = line.Trim();
-
-            if (trimmed.StartsWith(
-                    key + "=",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return trimmed[(trimmed.IndexOf('=') + 1)..].Trim();
-            }
-        }
-
-        return null;
-    }
-
-    private static string GetPowerShellValue(string command)
-    {
-        try
-        {
-            using var process = Process.Start(new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"" +
-                            command.Replace("\"", "\\\"") + "\"",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            });
-
-            if (process is null)
-                return "Unknown";
-
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            process.WaitForExit(5000);
-
-            return string.IsNullOrWhiteSpace(output) ? "Unknown" : output;
-        }
-        catch
-        {
-            return "Unknown";
-        }
-    }
-    
-    private static string BuildHtml(
-        object computer,
-        List<PassResult> results)
-    {
-        string json = JsonSerializer.Serialize(
-            new { Computer = computer, Results = results },
-            new JsonSerializerOptions { WriteIndented = true });
-    
-        string escaped = System.Net.WebUtility.HtmlEncode(json);
-    
-        var html = new StringBuilder();
-    
-        html.AppendLine("<!doctype html>");
-        html.AppendLine("<html lang=\"en\">");
-        html.AppendLine("<head>");
-        html.AppendLine("  <meta charset=\"utf-8\">");
-        html.AppendLine("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-        html.AppendLine("  <title>Black Myth: Wukong Benchmark Report</title>");
-        html.AppendLine("  <style>");
-        html.AppendLine("    body { font: 16px/1.5 system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }");
-        html.AppendLine("    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f4f6; padding: 20px; border-radius: 8px; }");
-        html.AppendLine("  </style>");
-        html.AppendLine("</head>");
-        html.AppendLine("<body>");
-        html.AppendLine("  <h1>Black Myth: Wukong Benchmark Report</h1>");
-        html.AppendLine("  <p>Benchmark results and computer information:</p>");
-        html.AppendLine("  <pre>");
-        html.AppendLine(escaped);
-        html.AppendLine("  </pre>");
-        html.AppendLine("</body>");
-        html.AppendLine("</html>");
-    
-        return html.ToString();
-    }
-    private sealed record PassResult(
-        string Test,
-        string ResultKey,
-        string ResultValue,
-        Dictionary<string, string> Settings);
-
-    private static class WindowInput
-    {
-        private const int SW_RESTORE = 9;
-        private const byte VK_RETURN = 0x0D;
-        private const uint KEYEVENTF_KEYUP = 0x0002;
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(
-            byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        public static void BringToFront(IntPtr handle)
-        {
-            if (handle == IntPtr.Zero)
-                throw new InvalidOperationException(
-                    "Benchmark window handle is empty.");
-
-            ShowWindow(handle, SW_RESTORE);
-            SetForegroundWindow(handle);
-        }
-
-        public static void SendEnter()
-        {
-            keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-            keybd_event(
-                VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        }
+        return new ComputerInfo { Cpu = cpu, Gpu = gpu, GpuDriver = driver, Os = os, RamGb = ram };
     }
 }
+
+internal sealed record BenchmarkReport
+{
+    public DateTime TimestampUtc { get; init; }
+    public string Executable { get; init; } = "";
+    public ComputerInfo Computer { get; init; } = new();
+    public BenchmarkResult? CpuTest { get; init; }
+    public BenchmarkResult? GpuTest { get; init; }
+}
+
+internal sealed record BenchmarkResult
+{
+    public string Name { get; init; } = "";
+    public string MetricKey { get; init; } = "";
+    public double MetricValue { get; init; }
+    public DateTime StartedUtc { get; init; }
+    public DateTime FinishedUtc { get; init; }
+    public Dictionary<string, string> Settings { get; init; } = new();
+    public Dictionary<string, string> Metrics { get; init; } = new();
+}
+
+internal static class HtmlReport
+{
+    public static string Render(BenchmarkReport r)
+    {
+        static string E(string s) => System.Net.WebUtility.HtmlEncode(s);
+        static string Table(Dictionary<string, string> d) =>
+            string.Join("", d.Select(x => $"<tr><td>{E(x.Key)}</td><td>{E(x.Value)}</td></tr>"));
+
+        string Result(BenchmarkResult? x)
+        {
+            if (x is null) return "<p>Not completed.</p>";
+            return $"""
+            <h3>{E(x.Name)} test</h3>
+            <p class="metric">{E(x.MetricKey)} = <b>{x.MetricValue:0.######}</b></p>
+            <h4>Settings</h4>
+            <table>{Table(x.Settings)}</table>
+            <h4>Benchmark metrics written by the game</h4>
+            <table>{Table(x.Metrics)}</table>
+            """;
+        }
+
+        return $$"""
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Black Myth: Wukong Benchmark Report</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;max-width:1050px;margin:40px auto;padding:0 24px;background:#111;color:#eee}
+h1{font-size:28px} h2{margin-top:36px} h3{margin-top:26px}
+.card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:20px;margin:18px 0}
+table{border-collapse:collapse;width:100%}td{border-bottom:1px solid #333;padding:8px}td:first-child{width:38%;color:#aaa}
+.metric{font-size:20px;background:#242424;padding:14px;border-radius:8px}
+small{color:#999}
+</style>
+</head>
+<body>
+<h1>Black Myth: Wukong Benchmark Report</h1>
+<p><small>Generated {{E(r.TimestampUtc.ToString("u"))}} UTC</small></p>
+
+<div class="card">
+<h2>Computer</h2>
+<table>
+<tr><td>OS</td><td>{{E(r.Computer.Os)}}</td></tr>
+<tr><td>CPU</td><td>{{E(r.Computer.Cpu)}}</td></tr>
+<tr><td>GPU</td><td>{{E(r.Computer.Gpu)}}</td></tr>
+<tr><td>GPU driver</td><td>{{E(r.Computer.GpuDriver)}}</td></tr>
+<tr><td>RAM</td><td>{{r.Computer.RamGb:0.0}} GB</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h2>CPU test</h2>
+{{Result(r.CpuTest)}}
+</div>
+
+<div class="card">
+<h2>GPU test</h2>
+{{Result(r.GpuTest)}}
+</div>
+</body>
+</html>
+""";
+    }
+}
+
