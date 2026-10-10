@@ -38,7 +38,7 @@ internal static class Program
         Console.WriteLine($"INI: {ini}");
         Console.WriteLine();
 
-        var computer = HardwareInfo.Read();
+        var computer = ComputerInfo.Read();
         PrintHardware(computer);
 
         // One backup is kept for the entire run. It is restored in finally.
@@ -135,25 +135,13 @@ internal static class Program
 
         // The standalone benchmark opens its main menu. The first menu item is
         // "Run Benchmark" / "Тест быстродействия" in the supplied screenshots.
-        await WaitForMainWindowAsync(process, TimeSpan.FromSeconds(60));
-        await Task.Delay(TimeSpan.FromSeconds(8));
+        await WaitForMainWindowAsync(process, TimeSpan.FromSeconds(30));
+        await Task.Delay(1500);
 
-        // The launcher may create a separate Unreal game process. Refresh the
-        // launcher handle, then use keyboard navigation in the foreground window.
-        process.Refresh();
         WindowInput.BringToFront(process.MainWindowHandle);
-        Console.WriteLine("Sending Enter to dismiss the startup/continue screen...");
-        WindowInput.SendEnter();
-        await Task.Delay(TimeSpan.FromSeconds(8));
-
-        // On the main menu, Home selects the first item (Benchmark) before Enter.
-        // This is more reliable than sending Enter without checking the selection.
-        WindowInput.BringToFront(process.MainWindowHandle);
-        WindowInput.SendHome();
-        await Task.Delay(500);
         WindowInput.SendEnter();
 
-        Console.WriteLine("Automated menu input sent. Waiting for the benchmark result in GameUserSettings.ini...");
+        Console.WriteLine("Benchmark started; waiting for the result to be written to GameUserSettings.ini...");
 
         var sw = Stopwatch.StartNew();
         float? value = null;
@@ -419,7 +407,6 @@ internal static class WindowInput
     private const int SW_RESTORE = 9;
     private const ushort KEYEVENTF_KEYUP = 0x0002;
     private const ushort VK_RETURN = 0x0D;
-    private const ushort VK_HOME = 0x24;
 
     public static void BringToFront(IntPtr hwnd)
     {
@@ -428,15 +415,26 @@ internal static class WindowInput
         SetForegroundWindow(hwnd);
     }
 
-    public static void SendEnter() => SendKey(VK_RETURN);
-    public static void SendHome() => SendKey(VK_HOME);
-
-    private static void SendKey(ushort key)
+    public static void SendEnter()
     {
         var inputs = new[]
         {
-            new INPUT { type = 1, U = new InputUnion { ki = new KEYBDINPUT { wVk = key } } },
-            new INPUT { type = 1, U = new InputUnion { ki = new KEYBDINPUT { wVk = key, dwFlags = KEYEVENTF_KEYUP } } }
+            new INPUT
+            {
+                type = 1,
+                U = new InputUnion
+                {
+                    ki = new KEYBDINPUT { wVk = VK_RETURN, dwFlags = 0 }
+                }
+            },
+            new INPUT
+            {
+                type = 1,
+                U = new InputUnion
+                {
+                    ki = new KEYBDINPUT { wVk = VK_RETURN, dwFlags = KEYEVENTF_KEYUP }
+                }
+            }
         };
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
